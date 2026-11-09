@@ -39,7 +39,7 @@ def main():
                         help='Total arc centered on the first held-out camera (default: 40)')
     parser.add_argument('--pixel-chunk', type=int, default=4096)
     parser.add_argument('--device', choices=['cpu', 'cuda', 'mps'], default=None)
-    parser.add_argument('--output-dir', type=Path, default=Path('outputs/p9'))
+    parser.add_argument('--output-dir', type=Path, default=Path('outputs/preview'))
     args = parser.parse_args()
     if args.frames < 2 or args.pixel_chunk < 1 or not 0 < args.arc_degrees <= 360:
         parser.error('Use at least 2 frames, a positive pixel chunk, and an arc in (0, 360]')
@@ -94,7 +94,7 @@ def main():
     (out / 'novel_cameras.json').write_text(json.dumps(pose_data, indent=2), encoding='utf-8')
     train_psnr, val_psnr = (row['psnr'] for row in summary)
     report = (
-        f'# P9 results\n\nCheckpoint: {args.checkpoint}\n\nGaussians: {count}\n\n'
+        f'# 3D scene preview\n\nCheckpoint: {args.checkpoint}\n\nGaussians: {count}\n\n'
         f'Mean training PSNR: {train_psnr:.2f} dB\n\n'
         f'Mean held-out PSNR: {val_psnr:.2f} dB\n\n'
         f'Training minus held-out: {train_psnr - val_psnr:.2f} dB\n\n'
@@ -104,9 +104,6 @@ def main():
         'using the first held-out camera\'s up axis and preserving its intrinsics. '
         'These generated views have no ground truth, so no PSNR is assigned to them.\n\n'
         '![Novel camera arc](novel_arc.gif)\n\n'
-        'Inspect silhouettes, background haze, gaps, and changes between frames. '
-        'Describe only artifacts visible in your results; distinguish limited coverage, '
-        'limited Gaussian capacity, and inconsistent geometry as possible explanations.\n'
     )
     (out / 'results.md').write_text(report, encoding='utf-8')
     print(f'Saved metrics, comparisons, novel PNG frames, and novel_arc.gif in {out}')

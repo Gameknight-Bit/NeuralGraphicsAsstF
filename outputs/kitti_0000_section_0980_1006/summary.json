@@ -1,0 +1,13 @@
+{
+  "training_views": 11,
+  "heldout_views": 3,
+  "mean_training_psnr_db": 17.249874221878787,
+  "mean_heldout_psnr_db": 12.589221843183703,
+  "gaussians": 1024,
+  "iterations": 1000,
+  "image_size": [
+    352,
+    94
+  ],
+  "method": "Existing fixed-count, random-box initialization baseline; supplied KITTI poses; no FSGS"
+}

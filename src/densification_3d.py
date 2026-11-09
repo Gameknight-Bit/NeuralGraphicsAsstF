@@ -1,4 +1,4 @@
-"""P8: prune floaters and clone/split 3D Gaussians within a budget."""
+"""Prune, clone, and split 3D Gaussians while preserving optimizer state."""
 
 import math
 
@@ -14,7 +14,7 @@ def densify_3d(p, grad_mag, budget, grad_threshold=2e-4, size_threshold=0.05,
 
     Split children use opposite sampled 3D offsets, scaled and rotated by the
     parent. Quaternions, colors, and opacity logits are copied. Return the same
-    source-row mapping used by P4's rebuild_adam helper.
+    source-row mapping used by rebuild_adam below.
     """
     count = len(p["mu3"])
     if not 0 < count <= budget or grad_mag.shape != (count,):
@@ -51,3 +51,25 @@ def densify_3d(p, grad_mag, budget, grad_threshold=2e-4, size_threshold=0.05,
         values["mu3"][-children:] += torch.stack((-offsets, offsets), dim=1).reshape(-1, 3)
         values["log_s"][-children:] -= math.log(split_scale)
     return {name: torch.nn.Parameter(value) for name, value in values.items()}, sources, new_rows, stats
+
+
+def rebuild_adam(old_opt, old_parameters, parameters, sources, new_rows, lr):
+    """Rebind Adam after count changes, retaining moments for original rows."""
+    opt = torch.optim.Adam(parameters.values(), lr=lr)
+    for name, parameter in parameters.items():
+        old_parameter = old_parameters[name]
+        old_state = old_opt.state.get(old_parameter)
+        if not old_state:
+            continue
+        state = {}
+        for key, value in old_state.items():
+            if isinstance(value, torch.Tensor) and value.shape == old_parameter.shape:
+                resized = value[sources].clone()
+                resized[new_rows] = 0
+                state[key] = resized
+            else:
+                state[key] = value.clone() if isinstance(value, torch.Tensor) else value
+        opt.state[parameter] = state
+    # Adam uses one step counter per parameter tensor. Children share that
+    # counter while starting with zero first/second moments.
+    return opt

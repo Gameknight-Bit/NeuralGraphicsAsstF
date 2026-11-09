@@ -1,4 +1,4 @@
-"""P8: compare a plain P7 cloud with a smaller cloud grown by densification."""
+"""Compare fixed-count and densified 3D scenes on training and held-out views."""
 
 import argparse
 import csv
@@ -20,7 +20,7 @@ def write_csv(path, rows):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="P8: plain vs. densified 3D reconstruction")
+    parser = argparse.ArgumentParser(description="Fixed-count vs. densified 3D reconstruction")
     parser.add_argument("dataset", type=Path)
     parser.add_argument("--budget", type=int, default=4000)
     parser.add_argument("--initial-count", type=int, default=512)
@@ -34,7 +34,7 @@ def main():
     parser.add_argument("--prune-opacity", type=float, default=0.005)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", choices=["cpu", "cuda", "mps"], default=None)
-    parser.add_argument("--output-dir", type=Path, default=Path("outputs/p8"))
+    parser.add_argument("--output-dir", type=Path, default=Path("outputs/compare"))
     args = parser.parse_args()
     if min(args.initial_count, args.budget, args.iters, args.pixel_chunk, args.densify_every) <= 0 or args.lr <= 0:
         parser.error("Counts, iterations, batch size, pass interval, and lr must be positive")
@@ -91,29 +91,19 @@ def main():
     plain_score, dense_score = summary[0]["heldout_psnr"], summary[1]["heldout_psnr"]
     winner = "densified" if dense_score > plain_score else "plain" if plain_score > dense_score else "tie"
     report = (
-        f"# P8 results\n\nBoth fits used {args.iters} Adam steps, lr={args.lr}, seed={args.seed}, "
-        f"and the same sampled training-camera sequence. The common budget was {args.budget}; "
-        "the table reports actual final counts. PSNR is the arithmetic mean over each split, "
-        "computed from float renders. Held-out images did not enter the loss.\n\n"
-        "Initialization followed P7: centers uniform in [-1.5,1.5]^3, scales 0.08, identity "
-        "quaternions, gray colors, and opacity sigmoid(-2).\n\n"
-        f"Every {args.densify_every} steps before the final step, mean position-gradient norms "
-        f"were compared with {args.grad_threshold}. Size is now measured in world units: "
-        f"max scale <= {args.world_size_threshold} is cloned in place; larger selected Gaussians "
-        f"are replaced by two children with scales divided by {args.split_scale}. Split offsets "
-        "are sampled in 3D, scaled along the parent's axes, rotated by its quaternion, and "
-        "applied with opposite signs. Quaternions, colors, and opacities are copied.\n\n"
-        f"Pruning removes opacity < {args.prune_opacity}, including when the budget is full; "
-        "one primitive is retained if all would be removed. The largest eligible gradient "
-        "scores get remaining capacity. As in P4, surviving Adam moments are preserved, new "
-        "rows get zero moments, and gradient averages reset after each pass. Adam's tensor "
-        "step counter is retained.\n\n"
-        f"Completed {len(passes)} passes, pruning {sum(p['pruned'] for p in passes)} primitives in total.\n\n"
+        f"# 3D densification comparison\n\nAdam steps: {args.iters}; lr: {args.lr}; seed: {args.seed}; "
+        f"Gaussian budget: {args.budget}. Both runs used the same training-camera sequence.\n\n"
+        "PSNR is the arithmetic mean over per-view float renders. "
+        "Held-out images were evaluated only after training.\n\n"
+        f"Densification: every {args.densify_every} steps; gradient threshold {args.grad_threshold}; "
+        f"world-size threshold {args.world_size_threshold}; split scale {args.split_scale}; "
+        f"opacity pruning threshold {args.prune_opacity}.\n\n"
+        f"Completed {len(passes)} densification passes. See densification.csv for per-pass counts.\n\n"
     )
     report += "\n".join(table) + f"\n\nHigher held-out PSNR: **{winner}**.\n\n"
-    report += "Panels show **ground truth | plain | densified** for the same held-out camera. Inspect the background and silhouettes for floater reduction.\n\n"
+    report += "Panels show **ground truth | plain | densified** for the same held-out camera. \n\n"
     (args.output_dir / "results.md").write_text(report + "\n\n".join(panels) + "\n", encoding="utf-8")
-    print(f"\nSaved P8 checkpoints, metrics, held-out comparisons, and results.md in {args.output_dir}")
+    print(f"\nSaved checkpoints, metrics, held-out comparisons, and results.md in {args.output_dir}")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""Load the posed images and shared intrinsics from the spheres dataset."""
+"""Load posed RGB images and shared intrinsics from cameras.json."""
 
 import json
 from pathlib import Path

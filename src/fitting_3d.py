@@ -1,11 +1,10 @@
-"""P7/P8: fit a shared 3D Gaussian cloud, with optional densification."""
+"""Fit a shared 3D Gaussian cloud, with optional densification."""
 
 import math
 
 import torch
 
-from densification import rebuild_adam
-from densification_3d import densify_3d
+from densification_3d import densify_3d, rebuild_adam
 from gaussians_3d import covariance_3d, project_gaussian
 from renderer import pixel_grid, render, render_pixels
 

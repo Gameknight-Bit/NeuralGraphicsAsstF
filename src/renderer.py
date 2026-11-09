@@ -2,8 +2,21 @@
 
 import torch
 
-from gaussians import covariance_2d, gaussian_weight
-from image_utils import get_device, save_image
+def gaussian_weight(xy, mu, Sigma):
+    """
+    xy: (P, 2) pixel coordinates.
+    mu: (N, 2) Gaussian centers.
+    Sigma: (N, 2, 2) positive definite covariance matrices.
+    Returns: (P, N), one weight for every pixel/Gaussian pair.
+    """
+    delta = xy[:, None, :] - mu[None, :, :]  # (P, N, 2)
+
+    # Solve Sigma * q = delta instead of explicitly computing Sigma^-1.
+    # Group the P pixel displacements as columns for each Gaussian.
+    rhs = delta.permute(1, 2, 0)  # (N, 2, P)
+    q = torch.linalg.solve(Sigma, rhs).permute(2, 0, 1)  # (P, N, 2)
+    squared_distance = (delta * q).sum(dim=-1)  # (P, N)
+    return torch.exp(-0.5 * squared_distance)
 
 
 def pixel_grid(H, W, device=None, dtype=torch.float32):
@@ -30,7 +43,7 @@ def render(mu, Sigma, color, opacity, order, H, W, pixel_chunk=2048):
     """Render N Gaussians as an (H, W, 3) floating-point RGB tensor.
 
     mu: (N, 2) gaussian centers in pixel coordinates.
-    Sigma: (N, 2, 2) positive definite covariances from covariance_2d.
+    Sigma: (N, 2, 2) positive definite projected covariances.
     color: (N, 3) straight (non-premultiplied) RGB in [0, 1].
     opacity: (N,) values in [0, 1].
     order: permutation of 0..N-1, sorted front to back.
@@ -43,23 +56,3 @@ def render(mu, Sigma, color, opacity, order, H, W, pixel_chunk=2048):
               for points in xy.split(pixel_chunk)]
 
     return torch.cat(chunks, dim=0).reshape(H, W, 3)
-
-#Can run this if we want to do small tests with renderer
-def main():
-    device = get_device()
-    mu = torch.tensor([[50.0, 64.0], [78.0, 64.0]], device=device)
-    scale = torch.tensor([[24.0, 14.0], [18.0, 24.0]], device=device)
-    theta = torch.tensor([0.4, -0.3], device=device)
-    color = torch.tensor([[1.0, 0.2, 0.1], [0.1, 0.4, 1.0]], device=device)
-    opacity = torch.tensor([0.8, 0.7], device=device)
-    order = torch.arange(2, device=device)
-
-    Sigma = covariance_2d(scale, theta)
-    image = render(mu, Sigma, color, opacity, order, H=128, W=128)
-
-    save_image(image, "p2_render.png")
-    print(f"Saved p2_render.png using {device}.")
-
-
-if __name__ == "__main__":
-    main()

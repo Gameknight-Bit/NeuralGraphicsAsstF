@@ -26,7 +26,7 @@ def project_gaussian(mu3, Sigma3, R_wc, t, K):
     """Project world-space means/covariances through one known camera.
 
     mu3: (N, 3); Sigma3: (N, 3, 3); R_wc: (3, 3); t: (3,); K: (3, 3).
-    K follows the assignment: [[fx, 0, cx], [0, fy, cy], [0, 0, 1]].
+    K uses pinhole intrinsics: [[fx, 0, cx], [0, fy, cy], [0, 0, 1]].
     Inputs must share a floating-point dtype and device.
     Returns pixel means (N, 2), pixel covariances (N, 2, 2), and depths (N,).
 
