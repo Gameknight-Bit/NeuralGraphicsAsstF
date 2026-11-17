@@ -121,7 +121,7 @@ def main():
             resized = image.convert('RGB').resize((width, height), Image.Resampling.LANCZOS)
             resized.save(target)
             samples.append((frame, split, resized.copy()))
-        record = dict(file=relative, R_wc=rotation.tolist(), t=translation.tolist())
+        record = dict(file=relative, capture_id=str(frame), R_wc=rotation.tolist(), t=translation.tolist())
         (heldout if split == 'val' else frames).append(record)
 
     assert {x['file'].split('/')[-1] for x in frames}.isdisjoint(x['file'].split('/')[-1] for x in heldout)

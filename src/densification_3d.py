@@ -55,7 +55,10 @@ def densify_3d(p, grad_mag, budget, grad_threshold=2e-4, size_threshold=0.05,
 
 def rebuild_adam(old_opt, old_parameters, parameters, sources, new_rows, lr):
     """Rebind Adam after count changes, retaining moments for original rows."""
-    opt = torch.optim.Adam(parameters.values(), lr=lr)
+    replacements = {old_parameters[name]: value for name, value in parameters.items()}
+    groups = [{**group, "params": [replacements[value] for value in group["params"]]}
+              for group in old_opt.param_groups]
+    opt = torch.optim.Adam(groups, lr=lr)
     for name, parameter in parameters.items():
         old_parameter = old_parameters[name]
         old_state = old_opt.state.get(old_parameter)

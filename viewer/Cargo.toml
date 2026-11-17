@@ -1,0 +1,9 @@
+[package]
+name = "street-view-gaussian-viewer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+wgpu = "28.0"
+winit = "0.30"

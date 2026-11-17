@@ -6,11 +6,14 @@ import torch
 
 from densification_3d import densify_3d, rebuild_adam
 from gaussians_3d import covariance_3d, project_gaussian
+from point_initialization import point_parameters
 from renderer import pixel_grid, render, render_pixels
 
 
-def initialize_scene(count, device):
-    """initialize: uniform [-1.5, 1.5]^3 centers and scale 0.08."""
+def initialize_scene(count, device, points=None):
+    """Use colored 3D points, or preserve the assignment's random-box baseline."""
+    if points is not None:
+        return {name: torch.nn.Parameter(value) for name, value in point_parameters(points, device).items()}
     quat = torch.zeros(count, 4, device=device)
     quat[:, 0] = 1.0
     values = {
@@ -47,22 +50,28 @@ def render_view(parameters, camera, pixel_chunk=2048):
 def fit_scene(cameras, num_gaussians=4000, iters=1500, lr=1e-2,
               pixel_chunk=2048, log_every=100, densification=False, budget=4000,
               densify_every=200, grad_threshold=2e-4, size_threshold=0.05,
-              split_scale=1.6, prune_opacity=0.005, camera_seed=0):
+              split_scale=1.6, prune_opacity=0.005, camera_seed=0,
+              points=None, objective="mse", position_lr=None):
     """Fit all five parameter groups; one random training camera per step.
 
-    Pixel batches accumulate the full chosen view's MSE gradient before one
+    Pixel batches accumulate the full chosen view's gradient before one
     Adam update, keeping memory manageable. Returns raw parameters and history.
     """
     if not cameras or min(num_gaussians, iters, pixel_chunk, log_every) <= 0 or lr <= 0:
         raise ValueError("Provide cameras and positive count, iterations, batch size, log interval, and lr")
-    if densification and (budget < num_gaussians or densify_every <= 0
+    count = len(points[0]) if points is not None else num_gaussians
+    if objective not in ("mse", "l1") or (position_lr is not None and not 0 < position_lr < math.inf):
+        raise ValueError("Invalid objective or position learning rate")
+    if densification and (budget < count or densify_every <= 0
                           or grad_threshold < 0 or size_threshold <= 0
                           or split_scale <= 1 or not 0 <= prune_opacity < 1):
         raise ValueError("Invalid densification settings; budget must cover the starting count")
-    p = initialize_scene(num_gaussians, cameras[0]["image"].device)
-    opt = torch.optim.Adam(p.values(), lr=lr)
+    p = initialize_scene(num_gaussians, cameras[0]["image"].device, points)
+    groups = [{"params": [value], "lr": position_lr if name == "mu3" and position_lr else lr}
+              for name, value in p.items()]
+    opt = torch.optim.Adam(groups, lr=lr)
     history = []
-    grad_sum, grad_steps = p["mu3"].new_zeros(num_gaussians), 0
+    grad_sum, grad_steps = p["mu3"].new_zeros(count), 0
     # Independent RNG makes plain/densified runs see the same camera sequence.
     camera_rng = torch.Generator().manual_seed(camera_seed)
     for step in range(1, iters + 1):
@@ -72,17 +81,21 @@ def fit_scene(cameras, num_gaussians=4000, iters=1500, lr=1e-2,
         xy = pixel_grid(cam["H"], cam["W"], target.device, target.dtype)
         opt.zero_grad(set_to_none=True)
         mse_sum = target.new_zeros(())
+        loss_sum = target.new_zeros(())
         for start in range(0, len(xy), pixel_chunk):
             # Recompute projection so every batch has its own autograd graph.
             projected = project_scene(p, cam)
             if len(projected[0]) == 0:
                 raise RuntimeError(f"No Gaussians in front of training camera {cam['file']}")
             image = render_pixels(xy[start:start + pixel_chunk], *projected)
-            loss = ((image - target[start:start + pixel_chunk]) ** 2).sum() / target.numel()
+            residual = image - target[start:start + pixel_chunk]
+            mse_batch = residual.square().sum() / target.numel()
+            loss = mse_batch if objective == "mse" else residual.abs().sum() / target.numel()
             loss.backward()
-            mse_sum += loss.detach()
-        mse = mse_sum.item()
-        if not math.isfinite(mse):
+            mse_sum += mse_batch.detach()
+            loss_sum += loss.detach()
+        mse, loss_value = mse_sum.item(), loss_sum.item()
+        if not math.isfinite(mse) or not math.isfinite(loss_value):
             raise RuntimeError(f"Non-finite loss at step {step}; try a smaller learning rate")
         if densification:
             with torch.no_grad():
@@ -90,7 +103,7 @@ def fit_scene(cameras, num_gaussians=4000, iters=1500, lr=1e-2,
             grad_steps += 1
         opt.step()
         psnr = -10 * math.log10(mse) if mse > 0 else math.inf
-        record = dict(step=step, camera=cam["file"], mse=mse, psnr=psnr, count=len(p["mu3"]))
+        record = dict(step=step, camera=cam["file"], loss=loss_value, mse=mse, psnr=psnr, count=len(p["mu3"]))
         history.append(record)
         if step == 1 or step % log_every == 0 or step == iters:
             print(f"Step {step}/{iters}, view {index}, N={len(p['mu3'])}: MSE={mse:.6f}, PSNR={psnr:.2f} dB")

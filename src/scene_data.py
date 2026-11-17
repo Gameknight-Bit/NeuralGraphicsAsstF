@@ -1,20 +1,20 @@
 """Load posed RGB images and shared intrinsics from cameras.json."""
 
-import json
 from pathlib import Path
 
 import torch
 
+from camera_manifest import capture_id, read_manifest, select_training
 from image_utils import load_image
 
 
-def load_cameras(folder, device="cpu", split="train"):
+def load_cameras(folder, device="cpu", split="train", train_stride=1):
     """Return camera dictionaries; preserve the images' original resolution."""
     folder = Path(folder)
-    data = json.loads((folder / "cameras.json").read_text(encoding="utf-8-sig"))
+    data = read_manifest(folder)
     if split not in ("train", "val"):
         raise ValueError("split must be 'train' or 'val'")
-    frames = data["frames" if split == "train" else "val_frames"]
+    frames = select_training(data, train_stride) if split == "train" else data.get("val_frames", [])
     if not frames:
         raise ValueError(f"No {split} views in cameras.json")
     K = torch.tensor(data["K"], dtype=torch.float32, device=device)
@@ -29,5 +29,6 @@ def load_cameras(folder, device="cpu", split="train"):
         t = torch.tensor(frame["t"], dtype=torch.float32, device=device)
         if image.shape != (H, W, 3) or R.shape != (3, 3) or t.shape != (3,):
             raise ValueError(f"Image/pose dimensions do not match cameras.json: {frame['file']}")
-        cameras.append(dict(file=frame["file"], image=image, R_wc=R, t=t, K=K, H=H, W=W))
+        cameras.append(dict(file=frame["file"], capture_id=capture_id(frame),
+                            image=image, R_wc=R, t=t, K=K, H=H, W=W))
     return cameras

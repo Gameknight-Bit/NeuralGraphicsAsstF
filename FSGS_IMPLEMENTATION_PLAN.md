@@ -1,6 +1,7 @@
 # FSGS implementation plan for the street-view project
 
-Prepared November 9, 2026. Status: implementation roadmap; the features below are not implemented by this document.
+Updated November 17, 2026. The prerequisites below distinguish features tested on KITTI,
+features tested on synthetic data, and FSGS exercises still yours to implement.
 
 ## 1. Goal and reading guide
 
@@ -18,23 +19,80 @@ Project scope follows the attached proposal: panoramic images -> COLMAP/calibrat
 
 FSGS combines neighbor-based growth, real-view depth guidance, and virtual-view regularization. Its ablations support testing each separately; unobserved occluded content remains a limitation. [Paper, Sections 3, 4.3, and 5](https://arxiv.org/html/2312.00451v2)
 
+### Your implementation lab
+
+**Start with a baseline you can explain.** Follow the COLMAP commands in the
+[README](README.md), and open `seed_report.json` and the sparse model. Pick a
+lamppost or a building edge seen in several training photos. Explain how
+matching image features and intersecting their calibrated rays gives a seed
+point, and why near-parallel rays make depth uncertain even with a small
+pixel residual. Compare random vs. colored-point initialization at the same
+actual count, seed, and optimization settings. Save one held-out panel and
+record whether the change reduced a geometry failure or mostly recovered
+color faster.
+
+**1. Learn what proximity growth adds.** In `densification_3d.py`, write a
+pure function that proposes midpoints before touching parameters or Adam.
+Try four centers along x at 0, 2, 4, and 10. With three neighbors and a
+strict mean-distance cutoff of 5, only 0 and 10 should propose new centers.
+With existing centers and duplicate proposals removed, expect x = 1, 5, 6,
+7. Deduplication is our adaptation. Compare this rule with the starter
+gradient clone/split rule, which may have no gradient signal in a gap with
+no splat. Then wire midpoint insertion into the existing optimizer resize
+path, zero moments for new rows, cap the count, and plot the proposed edges
+on the real cloud. Check whether they fill a wall or connect the wall to a
+tree across empty air. See [Section 5](#5-fsgs-component-a-proximity-guided-gaussian-growth).
+
+**2. Add depth to the RGB renderer, then give it a real-view prior.** In
+`renderer.py`, expose compositing weights once and reuse them for RGB,
+camera-Z depth, and coverage. For two splats at Z = 2 and 6 with alpha 0.5
+each, predict the weights before running code: 0.5 and 0.25, accumulated
+depth 2.5, coverage 0.75. Verify depth moves when you change the means or
+opacities. Next implement `1 - correlation` and test increasing, reversed,
+affine-shifted, and constant target arrays before using an estimator. Cache
+priors for training images and check their near/far ordering. Run the toy
+depth loss on a complete small image first: averaging correlations of
+pixel chunks changes both the statistic and its gradient. See
+[Section 6](#6-fsgs-component-b-rendered-depth-and-real-view-geometry-guidance).
+
+**3. Sample virtual cameras and follow both gradient paths.** Draw the
+first virtual camera halfway between two training centers; only then add
+small bounded perturbations. Use the rendered RGB to predict relative
+depth, then compare that prior with depth composited from the same
+Gaussians. On a tiny fixture replace the frozen estimator with a
+differentiable stand-in and verify gradients reach both the RGB and
+depth branches. Repeat with the RGB-derived prior detached and explain
+what changes. This prior is an estimate from our render, not a new
+photograph. See [Section 7](#7-fsgs-component-c-virtual-cameras-and-online-depth-guidance).
+
+Change one component at a time and write down the failure you expect it to
+fix before running each ablation. Reuse views 984, 992, and 1000 for the
+forward KITTI experiment. If you tune on those views, call them validation
+views in your report and reserve another segment for a final test if possible.
+
 ## 2. Where our implementation stands
 
 These observations come from the local source inspected for this plan.
 
 | Component | Current behavior | Required next work |
 |---|---|---|
-| `scene_data.py` | Reads posed RGB images with shared intrinsics from `cameras.json` | Preserve capture-position IDs; import calibrated cameras and initial points |
-| `fitting_3d.py` | Random box initialization; one global Adam rate; RGB MSE | Point-cloud initialization, parameter groups, schedules, combined losses |
+| `scene_data.py`, `camera_manifest.py` | Shared calibrated intrinsics, capture IDs, validation of poses/splits, training-only capture stride | Verify real panorama capture/pose input |
+| `prepare_panoramas.py` | Posed equirectangular-to-pinhole reprojection; synthetic seam and camera-center checks pass | Exercise the tool on a permitted panorama set |
+| `colmap_seed.py` | Known-pose triangulation workflow, seed provenance, and observation residual checks; verified on synthetic text model | Run COLMAP on the actual native-resolution KITTI training frames |
+| `fitting_3d.py` | Random or colored-point initialization, optional position LR, MSE or L1 | Tune a seeded baseline; add schedules, combined losses |
 | `gaussians_3d.py` | Quaternion covariance and pinhole projection | Retain and verify conventions against imported cameras |
 | `renderer.py` | Dense pixel/Gaussian interactions; RGB only | Differentiable RGB/depth/coverage; efficient rasterization |
 | `densification_3d.py` | Clone/split from world-position gradients; opacity pruning; Adam-state resizing | Screen-space statistics, proximity growth, explicit growth schedule |
-| `evaluation_3d.py` | MSE/PSNR and selected images | SSIM, timing/memory, position-level aggregation |
-| `train_3d.py` | Fixed-count training CLI | Make one configured scene run support baseline and incremental variants |
+| `evaluation_3d.py` | MSE, PSNR, optional SSIM, and selected images | Position-level aggregation when crop totals differ |
+| `train_3d.py` | Optional clone/split, held-out metrics after fitting, training time and CUDA peak allocation | Add explicitly named FSGS variants and provenance |
 | `compare_3d.py` | Plain versus densified comparison | Eventually compare the controlled variants in Section 11 |
 | `make_gif.py` | Saved-scene orbit preview | Retain as a diagnostic; add a separate street-path preview later |
 
-The 256-Gaussian, 300-step spheres run was a smoke test. It is not evidence that more iterations alone will solve sparse street reconstruction, and it did not test FSGS.
+The current real scene is the forward-facing KITTI-360 camera-00 section,
+frames 980–1006. Six-position CUDA runs checked fixed and densified
+training plus checkpoint reload. No real point seed or FSGS variant has
+been run yet. This section can test forward-route interpolation, but it
+cannot validate panoramic coverage or free movement to the side.
 
 ## 3. First prerequisite: trustworthy street data
 
@@ -254,21 +312,23 @@ If matching released optimizer/refinement ordering exactly, implement that as a 
 
 ## 9. Implementation order and file responsibilities
 
-Each row is future work. New filenames are suggestions; avoid creating parallel versions of the same trainer.
+Rows distinguish baseline work already prepared from planned changes.
+New filenames are suggestions; avoid creating parallel versions of the same trainer.
 
 | Order | Existing module or suggested addition | Work package | Completion evidence |
 |---|---|---|---|
-| 1 | Suggested `prepare_panoramas.py`; `scene_data.py` | Capture IDs, splits, crops, camera import, normalization | Split audit and point reprojection overlays |
-| 2 | `fitting_3d.py` | Point-cloud initialization and parameter groups | Colored initialized cloud; reload parity |
+| 1 | `prepare_panoramas.py`, `scene_data.py`, `colmap_seed.py` | Capture IDs, crops, pose validation, and triangulation are prepared | Inspect actual KITTI points and test real panoramas later |
+| 2 | `fitting_3d.py` | Colored initialization and optional position LR are prepared | Compare seeded and random training on real data |
 | 3 | `renderer.py` and backend adapter | Efficient RGB/depth/coverage; projected-point statistics | Reference comparisons and depth-gradient checks |
-| 4 | Suggested `losses.py`; `train_3d.py` | L1/SSIM and explicit run configuration | Stable calibrated baseline |
+| 4 | Suggested `losses.py`; `train_3d.py` | L1 and SSIM evaluation are separate now; add an SSIM training term as a controlled baseline variant | Stable calibrated baseline |
 | 5 | `densification_3d.py` | KNN growth policy, count budget, statistic/Adam updates | Toy-cloud checks and growth logs |
 | 6 | Suggested `depth_prior.py`; `losses.py` | Frozen estimator, training caches, correlation | Depth ordering, finite gradients, real-depth ablation |
 | 7 | Suggested `pseudo_views.py`; `fitting_3d.py` | Street virtual cameras, online priors, warm-up/ramp | Pose audit and pseudo-view ablation |
 | 8 | `evaluation_3d.py`; `compare_3d.py` | Reproducible variant/density experiments | Metrics tables, plots, and saved camera paths |
 | 9 | Suggested `export_scene.py`; Rust viewer | Versioned export and matching rendering | Python/Rust parity and measured navigation FPS |
 
-Suggested additions separate distinct responsibilities; they are not a request to implement code now. Start with work packages 1-4, preserving the small spheres diagnostic.
+Start by completing the real-data checks in rows 1 and 2. Keep the small
+spheres diagnostic while adding one feature at a time.
 
 ## 10. RTX 2060 resource plan
 
